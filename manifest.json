@@ -2,6 +2,11 @@
     "manifest_version": 3,
     "name": "Booru Show",
     "version": "1.0",
+    "browser_specific_settings": {
+        "gecko": {
+            "id": "boorushow@ackhack"
+        }
+    },
     "permissions": [
         "tabs",
         "storage",

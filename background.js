@@ -16,32 +16,62 @@ async function timerIteration(tabId) {
     await triggerTabOpen(tabId);
 }
 
+// In-memory cache: Map<url, { data: array, currentIndex: number }>
+const urlRotationCache = new Map();
+
 // Open tab based on storage URL
+
 async function triggerTabOpen(tabId) {
-    const data = await browser.storage.local.get("url"); // stored JSON endpoint
+    const data = await browser.storage.local.get("url");
     const jsonUrl = data.url;
-    console.log(jsonUrl);
+    console.log("Target URL:", jsonUrl);
 
     if (!jsonUrl) return;
 
-    const response = await fetchUrl(jsonUrl);
-    try {
-        if (!response) throw new Error("Failed to fetch JSON");
+    // 1. Check cache
+    const cache = urlRotationCache.get(jsonUrl);
+    let json = cache?.data;
+    let nextIndex = cache?.index ?? 0;
 
-        const json = response;
-
-        // Get the first object (index 0) and its media_asset.variants
-        if (Array.isArray(json) && json.length > 0) {
-            const variants = json[0]?.media_asset?.variants;
-            if (Array.isArray(variants) && variants.length > 0) {
-                const lastVariantUrl = variants[variants.length - 1].url;
-                console.log(lastVariantUrl);
-                const newTabId = await openLink(lastVariantUrl, tabId);
-                waitForTabCompletion(newTabId, await getDefaultDuration());
+    // 2. Fetch if not cached or invalid
+    if (!json || !Array.isArray(json) || nextIndex >= json.length) {
+        try {
+            urlRotationCache.delete(jsonUrl);
+            const response = await fetchUrl(jsonUrl);
+            if (!response || !Array.isArray(response)) {
+                throw new Error("Expected a JSON array");
             }
+            json = response;
+            nextIndex = 0;
+            // Store in cache
+            console.log("Caching " + json.length + " entries for " + jsonUrl);
+            urlRotationCache.set(jsonUrl, { data: json, index: nextIndex });
+        } catch (err) {
+            console.error("Failed to fetch or parse JSON:", err);
+            return;
         }
-    } catch (err) {
-        console.error("Error fetching or parsing JSON:", err);
+    } else {
+        console.log("Accessing cache for " + jsonUrl);
+    }
+
+    // 4. Select current item & advance index for next call
+    //clear cache if we have reached the end
+    const currentItem = json[nextIndex];
+    if (nextIndex < json.length)
+        urlRotationCache.set(jsonUrl, { data: json, index: nextIndex + 1 });
+    else 
+        urlRotationCache.delete(jsonUrl);
+
+    // 5. Extract & open the last variant
+    const variants = currentItem?.media_asset?.variants;
+    if (Array.isArray(variants) && variants.length > 0) {
+        const lastVariantUrl = variants[variants.length - 1].url;
+        console.log("Opening tab with variant:", lastVariantUrl);
+        
+        const newTabId = await openLink(lastVariantUrl, tabId);
+        waitForTabCompletion(newTabId, await getDefaultDuration());
+    } else {
+        console.warn(`No variants found at index ${nextIndex}. Skipping.`);
     }
 }
 
@@ -55,6 +85,7 @@ async function getDefaultDuration() {
 
 // Fetch content from url
 async function fetchUrl(url) {
+    console.log("Fetching: " + url);
     return new Promise((resolve, reject) => {
         const xhr = new XMLHttpRequest();
         xhr.open("GET", url, true);
